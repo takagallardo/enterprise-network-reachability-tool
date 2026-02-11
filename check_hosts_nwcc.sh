@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 ###############################################################################
-# check_hosts_summary.sh（表＋CSV出力＋実行時間付き）
+# check_hosts_summary.sh (Table + CSV output with execution time)
 ###############################################################################
 
 set -euo pipefail
 
-LIST="${LIST:-hostlist.txt}"                      # ホスト名リストファイル
-DOMAIN_SUFFIX="${DOMAIN_SUFFIX:-.pc.internal.woven.tech}"
-CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-3}"           # 秒
+LIST="${LIST:-hostlist.txt}"                      # Host list file
+DOMAIN_SUFFIX="${DOMAIN_SUFFIX:-.corp.local}"
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-3}"           # Timeout in seconds
 
 TS="$(date +%Y%m%d_%H%M%S)"
 OUTTXT="${OUTTXT:-result_${TS}.txt}"
@@ -15,7 +15,7 @@ OUTCSV="${OUTCSV:-result_${TS}.csv}"
 START_NS="$(date +%s%N)"
 START_ISO="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
-# 出力ヘルパー（表形式用）
+# Output helper (for formatted table display)
 p() {
   local fmt="$1"; shift || true
   # shellcheck disable=SC2059
@@ -49,11 +49,15 @@ tcp_check() {
   timeout "$CONNECT_TIMEOUT" bash -c "</dev/tcp/${host}/${port}" &>/dev/null
 }
 
-# 出力ヘッダ
+# Initialize output files
 : > "$OUTTXT"
 : > "$OUTCSV"
-p "%-21s | %-8s | %-18s | %-15s\n" "HOST" "OS" "ネットワーク接続" "SSH/RDP"
+
+# Table header
+p "%-21s | %-8s | %-18s | %-15s\n" "HOST" "OS" "Network Status" "SSH/RDP"
 p "%s\n" "---------------------+----------+--------------------+-----------------"
+
+# CSV header
 echo "timestamp,host,os,fqdn/ip,network_status,connection_status,port" >> "$OUTCSV"
 
 mapfile -t LINES < "$LIST"
@@ -75,40 +79,44 @@ for raw in "${LINES[@]}"; do
   fi
 
   ip=$(resolve_v4 "$fq")
+
+  # If DNS resolution fails
   if [[ -z "$ip" ]]; then
-    net="✖ 接続なし (DNS未解決)"
+    net="✖ No connection (DNS unresolved)"
     case "$os" in
-      Ubuntu)  conn="✖ SSH不可" ;;
-      Windows) conn="✖ RDP不可" ;;
+      Ubuntu)  conn="✖ SSH unavailable" ;;
+      Windows) conn="✖ RDP unavailable" ;;
       *)       conn="—" ;;
     esac
   else
+    # If primary port is defined
     if [[ -n "$port_main" ]]; then
       if tcp_check "$fq" "$port_main"; then
-        net="✓ ネットワーク接続"
-        if [[ "$os" == "Ubuntu" ]]; then conn="✓ SSH可"; else conn="✓ RDP可"; fi
+        net="✓ Network reachable"
+        if [[ "$os" == "Ubuntu" ]]; then conn="✓ SSH available"; else conn="✓ RDP available"; fi
       else
         if [[ "$os" == "Windows" ]]; then
-          net="ネットワーク接続不明"
-          conn="✖ RDP不可"
+          net="Network status uncertain"
+          conn="✖ RDP unavailable"
         else
-          net="✖ 接続なし"
-          conn="✖ SSH不可"
+          net="✖ Not reachable"
+          conn="✖ SSH unavailable"
         fi
       fi
     else
+      # Fallback port checks
       if tcp_check "$fq" 22 || tcp_check "$fq" 3389; then
-        net="✓ ネットワーク接続"
+        net="✓ Network reachable"
       else
-        net="✖ 接続なし"
+        net="✖ Not reachable"
       fi
-      conn="不明"
+      conn="Unknown"
     fi
   fi
 
   p "%-21s | %-8s | %-18s | %-15s\n" "$host" "$os" "$net" "$conn"
 
-  # CSV用出力（ISO時刻,ホスト,OS,FQDN/IP,ネットワーク状態,接続状態,ポート）
+  # CSV output (ISO timestamp, host, OS, FQDN/IP, network status, connection status, port)
   printf "%s,%s,%s,%s/%s,%s,%s,%s\n" \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" \
     "$host" "$os" "$fq" "${ip:-N/A}" \
@@ -116,13 +124,13 @@ for raw in "${LINES[@]}"; do
 done
 
 p "%s\n" "--------------------------------------------------------------------------"
-p "%s\n" "※ ネットワーク接続 = OS代表ポートへのTCP到達性（Ubuntu:22 / Windows:3389）"
-p "%s\n" "※ Windowsで到達不可時は『ネットワーク接続不明』として扱います（RDP不可）"
+p "%s\n" "Network Status = TCP reachability to primary OS port (Ubuntu:22 / Windows:3389)"
+p "%s\n" "For Windows, if unreachable, network status may be reported as uncertain (RDP unavailable)"
 
 END_NS="$(date +%s%N)"
 END_ISO="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 DUR_MS=$(( (END_NS - START_NS) / 1000000 ))
-p "%s\n" "実行開始: ${START_ISO} / 実行終了: ${END_ISO} / 実行時間: $((DUR_MS/1000)).$(printf '%03d' $((DUR_MS%1000)))秒"
 
-printf "\n✅ 出力ファイル:\n  - 表形式: %s\n  - CSV形式: %s\n" "$OUTTXT" "$OUTCSV"
+p "%s\n" "Start: ${START_ISO} / End: ${END_ISO} / Duration: $((DUR_MS/1000)).$(printf '%03d' $((DUR_MS%1000))) sec"
 
+printf "\nOutput files:\n  - Table format: %s\n  - CSV format: %s\n" "$OUTTXT" "$OUTCSV"
